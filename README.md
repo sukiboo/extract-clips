@@ -5,24 +5,14 @@ Detect motion and extract clips from recorded video. Ideal for extracting intere
 ## Requirements
 
 - Python 3.10+
-- ffmpeg (installed on your system)
-- OpenCV
 
 ## Installation
 
-1. Install ffmpeg if you don't have it:
-   ```bash
-   # Ubuntu/Debian
-   sudo apt install ffmpeg
-   
-   # macOS
-   brew install ffmpeg
-   ```
+```bash
+pip install -r requirements.txt
+```
 
-2. Install Python dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+This installs OpenCV and a bundled ffmpeg binary (no system install needed).
 
 ## Usage
 
