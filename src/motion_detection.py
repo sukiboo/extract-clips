@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timedelta
 
 import cv2
+from tqdm import tqdm
 
 from src.constants import (
     BG_DETECT_SHADOWS,
@@ -28,62 +29,58 @@ def process_videos(video_files: list[str]) -> None:
     if not video_files:
         return
 
+    total = len(video_files)
     total_clips = 0
-    for video_path in sorted(video_files):
-        clips = process_video(video_path)
+
+    for i, video_path in enumerate(sorted(video_files), 1):
+        clips = process_video(video_path, i, total)
         total_clips += clips
 
-    print(f"Extracted {total_clips} clips to {OUTPUT_DIR}/!")
+    print(f"\nExtracted {total_clips} clips to `{OUTPUT_DIR}`")
 
 
-def process_video(video_path: str) -> int:
+def process_video(video_path: str, index: int, total: int) -> int:
     """Process a single video: detect motion, merge timestamps, extract clips.
 
     Args:
         video_path: Path to the video file to process.
+        index: Current video index (1-based).
+        total: Total number of videos.
 
     Returns:
         The number of clips extracted.
     """
     video_name = os.path.basename(video_path)
-    print(f"\nProcessing: {video_name}")
+    prefix = f"[{index}/{total}] {video_name}"
 
     duration = get_video_duration(video_path)
     if duration <= 0:
-        print("  Error: Could not determine video duration")
+        print(f"{prefix} -- error: could not read video")
         return 0
 
-    print(f"  Duration: {duration:.1f}s")
+    # Print header line (will be overwritten with summary later)
+    print(prefix)
 
-    print("  Detecting motion...")
-    timestamps = detect_motion_timestamps(video_path)
-    print(f"  Found {len(timestamps)} motion frames")
-
-    if not timestamps:
-        print("  No motion detected")
-        return 0
+    # Detect motion with progress bar on next line
+    timestamps, motion_frames = detect_motion_timestamps_with_progress(video_path, duration)
 
     ranges = merge_timestamps_into_ranges(timestamps, duration)
-    print(f"  Merged into {len(ranges)} clip(s)")
-
-    if not ranges:
-        print("  No clips long enough to extract")
-        return 0
-
     clips_extracted = 0
-    video_start_time = datetime.fromtimestamp(os.path.getmtime(video_path))
 
-    for i, (start, end) in enumerate(ranges, 1):
-        motion_time = video_start_time + timedelta(seconds=start)
-        time_str = motion_time.strftime("%Y-%m-%d_%H.%M.%S")
-        output_name = f"{time_str}.mp4"
-        output_path = os.path.join(OUTPUT_DIR, output_name)
+    if ranges:
+        video_start_time = datetime.fromtimestamp(os.path.getmtime(video_path))
 
-        print(f"  Extracting clip {i}: {start:.1f}s - {end:.1f}s")
+        for start, end in ranges:
+            motion_time = video_start_time + timedelta(seconds=start)
+            time_str = motion_time.strftime("%Y-%m-%d_%H.%M.%S")
+            output_name = f"{time_str}.mp4"
+            output_path = os.path.join(OUTPUT_DIR, output_name)
 
-        if extract_clip(video_path, output_path, start, end):
-            clips_extracted += 1
-            print(f"    Saved: {output_name}")
+            if extract_clip(video_path, output_path, start, end):
+                clips_extracted += 1
+
+    # Move cursor up one line, overwrite with summary
+    print(f"\033[A\r{prefix} -- {clips_extracted} clips, {motion_frames} motion frames")
 
     return clips_extracted
 
@@ -111,22 +108,21 @@ def get_video_duration(video_path: str) -> float:
     return frame_count / fps
 
 
-def detect_motion_timestamps(video_path: str) -> list[float]:
-    """Detect timestamps (in seconds) where motion occurs in the video.
+def detect_motion_timestamps_with_progress(
+    video_path: str, duration: float
+) -> tuple[list[float], int]:
+    """Detect timestamps where motion occurs, with progress bar.
 
     Args:
         video_path: Path to the video file to process.
+        duration: Video duration in seconds.
 
     Returns:
-        A list of timestamps where motion occurs.
-
-    Uses background subtraction optimized for static cameras.
+        A tuple of (timestamps list, motion frame count).
     """
-
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"  Error: Could not open {video_path}")
-        return []
+        return [], 0
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
@@ -145,38 +141,61 @@ def detect_motion_timestamps(video_path: str) -> list[float]:
 
     motion_timestamps = []
     frame_idx = 0
+    motion_frames = 0
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    with tqdm(
+        total=int(duration),
+        bar_format="  {desc}|{bar:50}| {percentage:3.0f}%",
+        leave=False,
+        ascii=" #",
+    ) as pbar:
+        pbar.set_description("[0 clips, 0 motion frames] ")
 
-        # Skip frames for speed
-        if frame_idx % FRAME_SKIP != 0:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            current_time = frame_idx / fps
+
+            # Update progress bar
+            pbar.n = min(int(current_time), int(duration))
+            pbar.refresh()
+
+            # Skip frames for speed
+            if frame_idx % FRAME_SKIP != 0:
+                frame_idx += 1
+                continue
+
+            # Apply background subtraction
+            fg_mask = bg_subtractor.apply(frame)
+
+            # Find contours in the foreground mask
+            contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+            # Find largest contour area in this frame
+            frame_max_area = 0
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                frame_max_area = max(frame_max_area, area)
+
+            # Check if motion exceeds threshold
+            if frame_max_area > motion_threshold:
+                timestamp = frame_idx / fps
+                motion_timestamps.append(timestamp)
+                motion_frames += 1
+                # Update description with running count
+                clips_so_far = len(merge_timestamps_into_ranges(motion_timestamps, duration))
+                pbar.set_description(f"[{clips_so_far} clips, {motion_frames} motion frames] ")
+
             frame_idx += 1
-            continue
 
-        # Apply background subtraction
-        fg_mask = bg_subtractor.apply(frame)
-
-        # Find contours in the foreground mask
-        contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-        # Find largest contour area in this frame
-        frame_max_area = 0
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            frame_max_area = max(frame_max_area, area)
-
-        # Check if motion exceeds threshold
-        if frame_max_area > motion_threshold:
-            timestamp = frame_idx / fps
-            motion_timestamps.append(timestamp)
-
-        frame_idx += 1
+        # Final update
+        pbar.n = int(duration)
+        pbar.refresh()
 
     cap.release()
-    return motion_timestamps
+    return motion_timestamps, motion_frames
 
 
 def merge_timestamps_into_ranges(

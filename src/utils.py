@@ -26,7 +26,7 @@ def list_video_files() -> list[str]:
         print(f"No video files found in {INPUT_DIR}/")
         print("Supported formats: " + ", ".join(VIDEO_EXTENSIONS))
     else:
-        print(f"Found {len(video_files)} videos to process...")
+        print(f"Found {len(video_files)} videos to process in `{INPUT_DIR}`...\n")
 
     return video_files
 
