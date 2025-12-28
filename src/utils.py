@@ -2,7 +2,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 import static_ffmpeg
 
@@ -37,7 +37,7 @@ def get_video_start_time(video_path: str) -> datetime:
     """Get the video start time from filename or file modification time.
 
     Tries to parse timestamp from filename patterns like:
-        Ring_20250919_1734_...  -> 2025-09-19 17:34:00
+        Ring_20250919_1734_...  -> 2025-09-19 17:34:00 UTC -> local time
 
     Falls back to file modification time if parsing fails.
 
@@ -49,12 +49,14 @@ def get_video_start_time(video_path: str) -> datetime:
     """
     filename = os.path.basename(video_path)
 
-    # Try to match Ring camera format: Ring_YYYYMMDD_HHMM_...
+    # Try to match Ring camera format: Ring_YYYYMMDD_HHMM_... (timestamp is UTC)
     match = re.search(r"(\d{8})_(\d{4})", filename)
     if match:
         date_str, time_str = match.groups()
         try:
-            return datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+            utc_time = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+            utc_time = utc_time.replace(tzinfo=timezone.utc)
+            return utc_time.astimezone().replace(tzinfo=None)
         except ValueError:
             pass
 
