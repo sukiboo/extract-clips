@@ -1,17 +1,72 @@
-import cv2
+import os
+import subprocess
+import sys
+
+import static_ffmpeg
+
+from src.constants import INPUT_DIR, OUTPUT_DIR, VIDEO_EXTENSIONS
+
+# Download ffmpeg binary if needed (runs once at module import)
+static_ffmpeg.add_paths()
 
 
-def get_video_duration(video_path: str) -> float:
-    """Get video duration in seconds using OpenCV."""
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        return 0.0
+def list_video_files() -> list[str]:
+    """Find all video files in the input directory."""
+    os.makedirs(INPUT_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-    cap.release()
+    video_files = [
+        os.path.join(INPUT_DIR, f)
+        for f in os.listdir(INPUT_DIR)
+        if os.path.isfile(os.path.join(INPUT_DIR, f))
+        and os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS
+    ]
 
-    if fps <= 0:
-        return 0.0
+    if not video_files:
+        print(f"No video files found in {INPUT_DIR}/")
+        print("Supported formats: " + ", ".join(VIDEO_EXTENSIONS))
+    else:
+        print(f"Found {len(video_files)} videos to process...")
 
-    return frame_count / fps
+    return video_files
+
+
+def extract_clip(input_path: str, output_path: str, start: float, end: float) -> bool:
+    """Extract a clip using ffmpeg without re-encoding (fast).
+
+    Args:
+        input_path: Path to the input video file.
+        output_path: Path to the output video file.
+        start: Start time in seconds.
+        end: End time in seconds.
+
+    Returns:
+        True on success, False on failure.
+    """
+    duration = end - start
+
+    cmd = [
+        "ffmpeg",
+        "-y",  # Overwrite output
+        "-ss",
+        f"{start:.3f}",  # Start time
+        "-i",
+        input_path,  # Input file
+        "-t",
+        f"{duration:.3f}",  # Duration
+        "-c",
+        "copy",  # Copy streams (no re-encode)
+        "-avoid_negative_ts",
+        "make_zero",
+        output_path,
+    ]
+
+    try:
+        _ = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  ffmpeg error: {e.stderr}")
+        return False
+    except FileNotFoundError:
+        print("  Error: ffmpeg not found. Please install ffmpeg.")
+        sys.exit(1)

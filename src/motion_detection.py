@@ -1,3 +1,6 @@
+import os
+from datetime import datetime, timedelta
+
 import cv2
 
 from src.constants import (
@@ -11,14 +14,115 @@ from src.constants import (
     MERGE_GAP,
     MIN_CLIP_DURATION,
     MOTION_THRESHOLD_PERCENT,
+    OUTPUT_DIR,
 )
+from src.utils import extract_clip
+
+
+def process_videos(video_files: list[str]) -> None:
+    """Process videos and print summary.
+
+    Args:
+        video_files: List of video file paths to process.
+    """
+    if not video_files:
+        return
+
+    total_clips = 0
+    for video_path in sorted(video_files):
+        clips = process_video(video_path)
+        total_clips += clips
+
+    print(f"Extracted {total_clips} clips to {OUTPUT_DIR}/!")
+
+
+def process_video(video_path: str) -> int:
+    """Process a single video: detect motion, merge timestamps, extract clips.
+
+    Args:
+        video_path: Path to the video file to process.
+
+    Returns:
+        The number of clips extracted.
+    """
+    video_name = os.path.basename(video_path)
+    print(f"\nProcessing: {video_name}")
+
+    duration = get_video_duration(video_path)
+    if duration <= 0:
+        print("  Error: Could not determine video duration")
+        return 0
+
+    print(f"  Duration: {duration:.1f}s")
+
+    print("  Detecting motion...")
+    timestamps = detect_motion_timestamps(video_path)
+    print(f"  Found {len(timestamps)} motion frames")
+
+    if not timestamps:
+        print("  No motion detected")
+        return 0
+
+    ranges = merge_timestamps_into_ranges(timestamps, duration)
+    print(f"  Merged into {len(ranges)} clip(s)")
+
+    if not ranges:
+        print("  No clips long enough to extract")
+        return 0
+
+    clips_extracted = 0
+    video_start_time = datetime.fromtimestamp(os.path.getmtime(video_path))
+
+    for i, (start, end) in enumerate(ranges, 1):
+        motion_time = video_start_time + timedelta(seconds=start)
+        time_str = motion_time.strftime("%Y-%m-%d_%H.%M.%S")
+        output_name = f"{time_str}.mp4"
+        output_path = os.path.join(OUTPUT_DIR, output_name)
+
+        print(f"  Extracting clip {i}: {start:.1f}s - {end:.1f}s")
+
+        if extract_clip(video_path, output_path, start, end):
+            clips_extracted += 1
+            print(f"    Saved: {output_name}")
+
+    return clips_extracted
+
+
+def get_video_duration(video_path: str) -> float:
+    """Get video duration in seconds using OpenCV.
+
+    Args:
+        video_path: Path to the video file to process.
+
+    Returns:
+        The duration of the video in seconds.
+    """
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return 0.0
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+    cap.release()
+
+    if fps <= 0:
+        return 0.0
+
+    return frame_count / fps
 
 
 def detect_motion_timestamps(video_path: str) -> list[float]:
-    """
-    Detect timestamps (in seconds) where motion occurs in the video.
+    """Detect timestamps (in seconds) where motion occurs in the video.
+
+    Args:
+        video_path: Path to the video file to process.
+
+    Returns:
+        A list of timestamps where motion occurs.
+
     Uses background subtraction optimized for static cameras.
     """
+
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"  Error: Could not open {video_path}")
@@ -78,9 +182,14 @@ def detect_motion_timestamps(video_path: str) -> list[float]:
 def merge_timestamps_into_ranges(
     timestamps: list[float], video_duration: float
 ) -> list[tuple[float, float]]:
-    """
-    Merge nearby motion timestamps into continuous time ranges.
-    Adds buffer before/after and filters out very short clips.
+    """Merge nearby motion timestamps into continuous time ranges.
+
+    Args:
+        timestamps: List of timestamps where motion occurs.
+        video_duration: The duration of the video in seconds.
+
+    Returns:
+        A list of time ranges where motion occurs.
     """
     if not timestamps:
         return []

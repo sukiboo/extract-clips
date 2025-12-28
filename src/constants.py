@@ -6,8 +6,8 @@ OUTPUT_DIR = "./videos/outputs"
 MOTION_THRESHOLD_PERCENT = 0.05  # Min contour area as % of frame
 MIN_CLIP_DURATION = 5.0  # Seconds - ignore very brief motion
 MERGE_GAP = 5.0  # Seconds - merge motion events closer than this
-BUFFER_BEFORE = 1.0  # Seconds to include before motion starts
-BUFFER_AFTER = 1.0  # Seconds to include after motion ends
+BUFFER_BEFORE = 2.0  # Seconds to include before motion starts
+BUFFER_AFTER = 2.0  # Seconds to include after motion ends
 
 # video processing settings
 FRAME_SKIP = 10  # Process every Nth frame for speed
