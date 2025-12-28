@@ -35,7 +35,8 @@ DEBUG = True  # Print debug info about detected motion
 
 # Background subtractor settings (MOG2 algorithm)
 # Docs: https://docs.opencv.org/4.x/d7/d7b/classcv_1_1BackgroundSubtractorMOG2.html
-BG_HISTORY = 500  # Frames used to build background model
+BG_HISTORY_FRAMES = 500  # Actual video frames used to build background model
+BG_HISTORY = BG_HISTORY_FRAMES // FRAME_SKIP  # Adjusted for frame skipping
 BG_VAR_THRESHOLD = 50  # Variance threshold for background/foreground
 BG_DETECT_SHADOWS = False  # Whether to detect and mark shadows
 
