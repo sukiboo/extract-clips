@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import cv2
 from tqdm import tqdm
@@ -17,7 +17,7 @@ from src.constants import (
     MOTION_THRESHOLD_PERCENT,
     OUTPUT_DIR,
 )
-from src.utils import extract_clip
+from src.utils import extract_clip, get_video_start_time
 
 
 def process_videos(video_files: list[str]) -> None:
@@ -68,7 +68,7 @@ def process_video(video_path: str, index: int, total: int) -> int:
     clips_extracted = 0
 
     if ranges:
-        video_start_time = datetime.fromtimestamp(os.path.getmtime(video_path))
+        video_start_time = get_video_start_time(video_path)
 
         for start, end in ranges:
             motion_time = video_start_time + timedelta(seconds=start)

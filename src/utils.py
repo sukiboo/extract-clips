@@ -1,6 +1,8 @@
 import os
+import re
 import subprocess
 import sys
+from datetime import datetime
 
 import static_ffmpeg
 
@@ -29,6 +31,35 @@ def list_video_files() -> list[str]:
         print(f"Found {len(video_files)} videos to process in `{INPUT_DIR}`...\n")
 
     return video_files
+
+
+def get_video_start_time(video_path: str) -> datetime:
+    """Get the video start time from filename or file modification time.
+
+    Tries to parse timestamp from filename patterns like:
+        Ring_20250919_1734_...  -> 2025-09-19 17:34:00
+
+    Falls back to file modification time if parsing fails.
+
+    Args:
+        video_path: Path to the video file.
+
+    Returns:
+        datetime of when the video started.
+    """
+    filename = os.path.basename(video_path)
+
+    # Try to match Ring camera format: Ring_YYYYMMDD_HHMM_...
+    match = re.search(r"(\d{8})_(\d{4})", filename)
+    if match:
+        date_str, time_str = match.groups()
+        try:
+            return datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M")
+        except ValueError:
+            pass
+
+    # Fall back to file modification time
+    return datetime.fromtimestamp(os.path.getmtime(video_path))
 
 
 def extract_clip(input_path: str, output_path: str, start: float, end: float) -> bool:
