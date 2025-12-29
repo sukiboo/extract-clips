@@ -1,6 +1,7 @@
 # Extract Motion Clips from Videos
 
 Extract motion clips from security camera footage. Scans videos for movement and saves only the interesting parts.
+I use it to scan lots of Ring recordings to extract the clips of cats messing around 😼
 
 ## Quick Start
 
