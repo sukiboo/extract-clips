@@ -2,8 +2,9 @@
 INPUT_DIR = "./videos/inputs"
 OUTPUT_DIR = "./videos/outputs"
 
-# motion detection settings
-MOTION_THRESHOLD_PERCENT = 0.2  # Min contour area as % of frame
+# motion detection settings (hysteresis thresholding)
+MOTION_THRESHOLD_PERCENT_MAX = 0.25  # Trigger clip capture when motion exceeds this
+MOTION_THRESHOLD_PERCENT_MIN = 0.05  # Extend clip as long as motion exceeds this
 MIN_CLIP_DURATION = 12.0  # Seconds - ignore very brief motion
 MERGE_GAP = 12.0  # Seconds - merge motion events closer than this
 BUFFER_BEFORE = 2.0  # Seconds to include before motion starts

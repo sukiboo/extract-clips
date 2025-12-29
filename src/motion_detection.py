@@ -14,7 +14,8 @@ from src.constants import (
     FRAME_SKIP,
     MERGE_GAP,
     MIN_CLIP_DURATION,
-    MOTION_THRESHOLD_PERCENT,
+    MOTION_THRESHOLD_PERCENT_MAX,
+    MOTION_THRESHOLD_PERCENT_MIN,
     OUTPUT_DIR,
 )
 from src.utils import extract_clip, get_video_start_time
@@ -62,9 +63,9 @@ def process_video(video_path: str, index: int, total: int) -> int:
     print(prefix)
 
     # Detect motion with progress bar on next line
-    timestamps, motion_frames = detect_motion_timestamps_with_progress(video_path, duration)
+    raw_ranges, motion_frames = detect_motion_ranges_with_progress(video_path, duration)
 
-    ranges = merge_timestamps_into_ranges(timestamps, duration)
+    ranges = merge_motion_ranges(raw_ranges, duration)
     clips_extracted = 0
 
     if ranges:
@@ -108,17 +109,25 @@ def get_video_duration(video_path: str) -> float:
     return frame_count / fps
 
 
-def detect_motion_timestamps_with_progress(
+def detect_motion_ranges_with_progress(
     video_path: str, duration: float
-) -> tuple[list[float], int]:
-    """Detect timestamps where motion occurs, with progress bar.
+) -> tuple[list[tuple[float, float]], int]:
+    """Detect motion ranges using hysteresis thresholding, with progress bar.
+
+    Uses two thresholds:
+    - MIN: Start/extend potential clips when motion exceeds this
+    - MAX: Confirm a clip should be saved when motion exceeds this
+
+    This captures "bursty" motion patterns (like a cat running/jumping) along with
+    the lead-up and wind-down, while ignoring slow continuous motion that never
+    gets dramatic enough to exceed MAX.
 
     Args:
         video_path: Path to the video file to process.
         duration: Video duration in seconds.
 
     Returns:
-        A tuple of (timestamps list, motion frame count).
+        A tuple of (confirmed motion ranges, motion frame count).
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -128,20 +137,26 @@ def detect_motion_timestamps_with_progress(
     if fps <= 0:
         fps = FALLBACK_FPS
 
-    # Calculate motion threshold from frame dimensions
+    # Calculate motion thresholds from frame dimensions
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     frame_area = frame_width * frame_height
-    motion_threshold = frame_area * (MOTION_THRESHOLD_PERCENT / 100)
+    threshold_min = frame_area * (MOTION_THRESHOLD_PERCENT_MIN / 100)
+    threshold_max = frame_area * (MOTION_THRESHOLD_PERCENT_MAX / 100)
 
     # Background subtractor - good for static cameras
     bg_subtractor = cv2.createBackgroundSubtractorMOG2(
         history=BG_HISTORY, varThreshold=BG_VAR_THRESHOLD, detectShadows=BG_DETECT_SHADOWS
     )
 
-    motion_timestamps = []
+    confirmed_ranges: list[tuple[float, float]] = []
     frame_idx = 0
     motion_frames = 0
+
+    # State machine for hysteresis tracking
+    tracking = False
+    track_start = 0.0
+    has_dramatic_motion = False
 
     with tqdm(
         total=int(duration),
@@ -149,7 +164,7 @@ def detect_motion_timestamps_with_progress(
         leave=False,
         ascii=" #",
     ) as pbar:
-        pbar.set_description("[0 clips, 0 motion frames] ")
+        pbar.set_description("[0 motion frames] ")
 
         while True:
             ret, frame = cap.read()
@@ -179,61 +194,81 @@ def detect_motion_timestamps_with_progress(
                 area = cv2.contourArea(contour)
                 frame_max_area = max(frame_max_area, area)
 
-            # Check if motion exceeds threshold
-            if frame_max_area > motion_threshold:
-                timestamp = frame_idx / fps
-                motion_timestamps.append(timestamp)
+            # Hysteresis state machine
+            if frame_max_area >= threshold_min:
                 motion_frames += 1
-                # Update description with running count
-                clips_so_far = len(merge_timestamps_into_ranges(motion_timestamps, duration))
-                pbar.set_description(f"[{clips_so_far} clips, {motion_frames} motion frames] ")
+                pbar.set_description(f"[{motion_frames} motion frames] ")
+
+                if not tracking:
+                    # Start tracking potential clip
+                    tracking = True
+                    track_start = current_time
+                    has_dramatic_motion = False
+
+                if frame_max_area >= threshold_max:
+                    # Dramatic motion detected - confirm this clip
+                    has_dramatic_motion = True
+
+            elif tracking:
+                # Motion dropped below MIN - end tracking
+                if has_dramatic_motion:
+                    # Save confirmed clip
+                    confirmed_ranges.append((track_start, current_time))
+                # Reset state
+                tracking = False
+                has_dramatic_motion = False
 
             frame_idx += 1
+
+        # Handle case where video ends while tracking
+        if tracking and has_dramatic_motion:
+            confirmed_ranges.append((track_start, duration))
 
         # Final update
         pbar.n = int(duration)
         pbar.refresh()
 
     cap.release()
-    return motion_timestamps, motion_frames
+    return confirmed_ranges, motion_frames
 
 
-def merge_timestamps_into_ranges(
-    timestamps: list[float], video_duration: float
+def merge_motion_ranges(
+    ranges: list[tuple[float, float]], video_duration: float
 ) -> list[tuple[float, float]]:
-    """Merge nearby motion timestamps into continuous time ranges.
+    """Merge nearby motion ranges, add buffers, and filter short clips.
 
     Args:
-        timestamps: List of timestamps where motion occurs.
+        ranges: List of (start, end) time ranges where motion occurs.
         video_duration: The duration of the video in seconds.
 
     Returns:
-        A list of time ranges where motion occurs.
+        A list of merged and buffered time ranges.
     """
-    if not timestamps:
+    if not ranges:
         return []
 
-    timestamps = sorted(timestamps)
-    ranges = []
-    range_start = timestamps[0]
-    range_end = timestamps[0]
+    # Sort by start time
+    sorted_ranges = sorted(ranges, key=lambda r: r[0])
 
-    for ts in timestamps[1:]:
-        if ts - range_end <= MERGE_GAP:
+    # Merge nearby ranges
+    merged = []
+    current_start, current_end = sorted_ranges[0]
+
+    for start, end in sorted_ranges[1:]:
+        if start - current_end <= MERGE_GAP:
             # Extend current range
-            range_end = ts
+            current_end = max(current_end, end)
         else:
             # Save current range and start new one
-            ranges.append((range_start, range_end))
-            range_start = ts
-            range_end = ts
+            merged.append((current_start, current_end))
+            current_start, current_end = start, end
 
     # Don't forget the last range
-    ranges.append((range_start, range_end))
+    merged.append((current_start, current_end))
 
     # Add buffers and filter short clips
     final_ranges = []
-    for start, end in ranges:
+    for start, end in merged:
         duration = end - start
         if duration < MIN_CLIP_DURATION:
             continue
